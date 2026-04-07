@@ -10,7 +10,6 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
     <script src="https://unpkg.com/@jspsych/plugin-preload@1.1.2"></script>
     <style>
-        /* 强制居中所有内容 */
         .jspsych-display-element {
             display: flex !important;
             flex-direction: column !important;
@@ -122,7 +121,7 @@
 </head>
 <body>
     <video id="webcam-video" autoplay playsinline></video>
-    <div id="face-warning">⚠️ Face not detected. Please adjust your position.</div>
+    <div id="face-warning"> Face not detected. Please adjust your position.</div>
 </body>
 <script>
     const jsPsych = initJsPsych({
@@ -259,7 +258,6 @@
         return tempFaces;
     }
 
-    // ========== 辅助 Trial 函数 ==========
     function fixation(duration) {
         return {
             type: jsPsychHtmlKeyboardResponse,
@@ -281,7 +279,6 @@
         };
     }
 
-    // ========== Social Trial (Binary Judgment + Confidence) ==========
     function createSocialTrial(face) {
         return {
             type: jsPsychHtmlKeyboardResponse,
@@ -307,14 +304,12 @@
             },
             on_finish: (data) => {
                 data.rt = performance.now() - data.start_time;
-                // 记录 binary response
                 data.response_label = data.response === 'k' ? 'trustworthy' : 'not_trustworthy';
                 data.response_binary = data.response === 'k' ? 1 : 0;
             }
         };
     }
 
-    // ========== Confidence Trial (1-5) ==========
     function createConfidenceTrial() {
         return {
             type: jsPsychHtmlKeyboardResponse,
@@ -324,23 +319,20 @@
                                 ${[1,2,3,4,5].map(n => `<button class="conf-btn" data-conf="${n}">${n}</button>`).join('')}
                             </div>
                         </div>`,
-            choices: "NO_KEYS", // 禁用键盘响应，只等待按钮点击
+            choices: "NO_KEYS",
             data: { task: 'confidence' },
             on_start: (trial) => {
                 trial.start_time = performance.now();
             },
             on_load: () => {
-                // 为所有按钮添加点击事件监听器
                 document.querySelectorAll('.conf-btn').forEach(btn => {
                     btn.addEventListener('click', (e) => {
                         const conf = parseInt(e.target.getAttribute('data-conf'));
                         const rt = performance.now() - jsPsych.getCurrentTrial().start_time;
-                        // 将置信度数据和反应时添加到当前 trial 的数据中
                         jsPsych.data.addDataToLastTrial({ 
                             confidence: conf, 
                             confidence_rt: rt 
                         });
-                        // 结束当前 trial，进入下一个
                         jsPsych.finishTrial();
                     });
                 });
@@ -348,7 +340,6 @@
         };
     }
 
-    // ========== Brightness Trial (保持原样，只用于 behavioral check) ==========
     function createSensoryTrial(face) {
         return {
             timeline: [
@@ -391,7 +382,6 @@
         };
     }
 
-    // ========== 构建 Timeline ==========
     async function buildTimeline() {
         faces = await loadStimuli();
         if (faces.length === 0) {
