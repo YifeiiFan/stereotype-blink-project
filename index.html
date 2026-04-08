@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stereotype Incongruence & Decision-Making Task</title>
+    <script src="https://unpkg.com/jspsych@7.3.4"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@1.1.2"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-preload@1.1.2"></script>
+    <link href="https://unpkg.com/jspsych@7.3.4/css/jspsych.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <style>
+        /* 强制居中所有内容 */
+        .jspsych-display-element {
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: center !important;
+            align-items: center !important;
+            text-align: center !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            overflow: hidden !important;
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+        }
+
+        #jspsych-content {
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: center !important;
+            align-items: center !important;
+            text-align: center !important;
+            width: 100% !important;
+            margin: 0 auto !important;
+            padding: 20px !important;
+        }
+
+        #webcam-video { 
+            position: fixed; 
+            bottom: 10px; 
+            right: 10px; 
+            width: 160px; 
+            height: 120px; 
+            border: 2px solid #ccc; 
+            border-radius: 8px; 
+            z-index: 1000; 
+            background: #333; 
+        }
+
+        #face-warning { 
+            position: fixed; 
+            bottom: 140px; 
+            right: 10px; 
+            width: 160px; 
+            background: rgba(255,0,0,0.8); 
+            color: white; 
+            font-size: 12px; 
+            text-align: center; 
+            padding: 4px; 
+            border-radius: 4px; 
+            z-index: 1001; 
+            display: none; 
+        }
+
+        .face-img { 
+            max-width: 400px; 
+            width: auto; 
+            margin: 0 auto 20px auto; 
+            display: block; 
+        }
+
+        .instruction { 
+            text-align: center; 
+            font-size: 24px; 
+            margin: 20px; 
+            line-height: 1.5; 
+        }
+
+        .conf-scale { 
+            display: flex; 
+            justify-content: center; 
+            gap: 12px; 
+            margin-top: 30px; 
+            flex-wrap: wrap; 
+        }
+
+        .conf-btn { 
+            padding: 10px 20px; 
+            font-size: 18px; 
+            cursor: pointer; 
+            background: #eee; 
+            border: 1px solid #ccc; 
+            border-radius: 8px; 
+            transition: 0.2s; 
+        }
+
+        .conf-btn:hover { 
+            background: #ddd; 
+        }
+
+        .fixation { 
+            font-size: 60px; 
+            text-align: center; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            width: 100%; 
+            height: 100%; 
+            margin: 0; 
+            padding: 0; 
+        }
+        
+        .response-prompt {
+            font-size: 18px;
+            margin-top: 20px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <video id="webcam-video" autoplay playsinline></video>
+    <div id="face-warning">⚠️ Face not detected. Please adjust your position.</div>
+</body>
+<script>
+    const jsPsych = initJsPsych({
+        on_finish: () => {
+            jsPsych.data.get().localSave('csv', 'experiment_data.csv');
+            jsPsych.data.displayData('csv');
+        }
+    });
+    
+    // ========== 全局变量 ==========
+    let earCounter = 0;
+    let trialStartTime = 0;
+    let lastResponseTime = null;  // 【新增】记录最近一次 response 的绝对时间
+    const EAR_THRESHOLD = 0.20;
+    const EAR_CONSEC_FRAMES = 2;
+    const BLINK_WINDOW_MS = 2000;  // 【新增】2000ms 窗口
+
+    const videoElement = document.getElementById('webcam-video');
+    const warningDiv = document.getElementById('face-warning');
+    const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5 });
+
+    function eyeAspectRatio(landmarks, eyePoints) {
+        const p1 = landmarks[eyePoints[0]];
+        const p2 = landmarks[eyePoints[1]];
+        const p3 = landmarks[eyePoints[2]];
+        const p4 = landmarks[eyePoints[3]];
+        const p5 = landmarks[eyePoints[4]];
+        const p6 = landmarks[eyePoints[5]];
+        if (!p1 || !p4) return 0;
+        const vertical1 = Math.hypot(p2.y - p6.y, p2.x - p6.x);
+        const vertical2 = Math.hypot(p3.y - p5.y, p3.x - p5.x);
+        const horizontal = Math.hypot(p1.y - p4.y, p1.x - p4.x);
+        if (horizontal === 0) return 0;
+        return (vertical1 + vertical2) / (2.0 * horizontal);
+    }
+
+    // 【修改】Blink 检测 + 2000ms 窗口判断
+    faceMesh.onResults((results) => {
+        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+            warningDiv.style.display = 'block';
+            return;
+        }
+        warningDiv.style.display = 'none';
+        
+        const landmarks = results.multiFaceLandmarks[0];
+        const leftEye = [33, 160, 158, 133, 153, 144];
+        const rightEye = [362, 385, 387, 263, 373, 380];
+        const leftEAR = eyeAspectRatio(landmarks, leftEye);
+        const rightEAR = eyeAspectRatio(landmarks, rightEye);
+        const ear = (leftEAR + rightEAR) / 2;
+        
+        if (ear < EAR_THRESHOLD) {
+            earCounter++;
+            if (earCounter === EAR_CONSEC_FRAMES) {
+                const currentTime = performance.now();
+                // 检查是否在 2000ms 窗口内
+                if (lastResponseTime !== null && 
+                    currentTime > lastResponseTime && 
+                    currentTime - lastResponseTime <= BLINK_WINDOW_MS) {
+                    const blinkLatency = currentTime - lastResponseTime;
+                    jsPsych.data.addDataToLastTrial({ 
+                        blink_detected: 1,
+                        blink_latency: blinkLatency
+                    });
+                    console.log("Blink detected at", blinkLatency, "ms post-response");
+                } else if (lastResponseTime !== null) {
+                    console.log("Blink outside window, ignored");
+                }
+            }
+        } else {
+            earCounter = 0;
+        }
+    });
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => { await faceMesh.send({ image: videoElement }); },
+        width: 640, height: 480
+    });
+
+    function shuffleArray(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    }
+
+    let faces = [];
+    
+    async function loadStimuli() {
+        const response = await fetch('stims.csv');
+        const csvText = await response.text();
+        const lines = csvText.split('\n');
+        const headers = lines[0].split(',').map(h => h.trim());
+        
+        const idx_face_id = headers.indexOf('face_id');
+        const idx_social_img = headers.indexOf('social_img');
+        const idx_sensory_img = headers.indexOf('sensory_img');
+        const idx_gender = headers.indexOf('gender');
+        const idx_trust_level = headers.indexOf('trust_level');
+        const idx_target_brightness = headers.indexOf('target_brightness');
+        const idx_corr_key = headers.indexOf('corr_sensory_key');
+        
+        let facesMap = new Map();
+        
+        for (let i = 1; i < lines.length; i++) {
+            if (lines[i].trim() === '') continue;
+            const cols = lines[i].split(',').map(c => c.trim());
+            if (cols.length < 8) continue;
+            
+            const face_id = cols[idx_face_id];
+            if (!facesMap.has(face_id)) {
+                facesMap.set(face_id, {
+                    face_id: face_id,
+                    social_img: 'stims/' + cols[idx_social_img],
+                    gender: cols[idx_gender],
+                    trust_level: cols[idx_trust_level],
+                    sensory_options: []
+                });
+            }
+            facesMap.get(face_id).sensory_options.push({
+                img: 'stims/' + cols[idx_sensory_img],
+                target_brightness: cols[idx_target_brightness],
+                corr_key: cols[idx_corr_key]
+            });
+        }
+        
+        let tempFaces = [];
+        for (let [id, face] of facesMap) {
+            const chosen = face.sensory_options[Math.floor(Math.random() * face.sensory_options.length)];
+            tempFaces.push({
+                face_id: face.face_id,
+                social_img: face.social_img,
+                sensory_img: chosen.img,
+                gender: face.gender,
+                trust_level: face.trust_level,
+                target_brightness: chosen.target_brightness,
+                corr_sensory_key: chosen.corr_key
+            });
+        }
+        
+        tempFaces = shuffleArray(tempFaces);
+        console.log(`Loaded ${tempFaces.length} faces`);
+        return tempFaces;
+    }
+
+    // ========== 辅助 Trial 函数 ==========
+    function fixation(duration) {
+        return {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: '<div style="display: flex; justify-content: center; align-items: center; height: 100vh; width: 100vw; margin: 0; padding: 0; font-size: 60px;">+</div>',
+            choices: "NO_KEYS",
+            trial_duration: duration,
+            data: { task: 'fixation' }
+        };
+    }
+
+    function iti() {
+        const duration = 500 + Math.random() * 500;
+        return {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: '<div class="fixation" style="opacity:0.3;">+</div>',
+            choices: "NO_KEYS",
+            trial_duration: duration,
+            data: { task: 'iti', duration: duration }
+        };
+    }
+
+    // ========== Social Trial (Binary Judgment + Confidence) ==========
+    function createSocialTrial(face) {
+        return {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: `<div style="text-align:center;">
+                            <img class="face-img" src="${face.social_img}" alt="face">
+                            <p style="font-size:20px; margin-top:20px;">Does this person look trustworthy?</p>
+                            <p style="font-size:16px; color:#666;">Press 'k' for trustworthy, 'd' for not trustworthy</p>
+                        </div>`,
+            choices: ['k', 'd'],
+            data: { 
+                task: 'social_binary', 
+                face_id: face.face_id, 
+                trust_level: face.trust_level, 
+                gender: face.gender, 
+                block: 'social',
+                response_label: null
+            },
+            on_start: (trial) => { 
+                const now = performance.now(); 
+                trial.start_time = now; 
+                trialStartTime = now; 
+            },
+            on_finish: (data) => {
+                data.rt = performance.now() - data.start_time;
+                data.response_label = data.response === 'k' ? 'trustworthy' : 'not_trustworthy';
+                data.response_binary = data.response === 'k' ? 1 : 0;
+                // 【关键】更新全局 response 时间
+                lastResponseTime = performance.now();
+            }
+        };
+    }
+
+    // ========== Confidence Trial (1-5) ==========
+    function createConfidenceTrial() {
+        return {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: `<div style="text-align:center;">
+                            <p style="font-size:24px; margin-bottom:40px;">How confident are you in your judgment?</p>
+                            <div class="conf-scale">
+                                ${[1,2,3,4,5].map(n => `<button class="conf-btn" data-conf="${n}">${n}</button>`).join('')}
+                            </div>
+                        </div>`,
+            choices: "NO_KEYS",
+            data: { task: 'confidence' },
+            on_start: (trial) => {
+                trial.start_time = performance.now();
+            },
+            on_load: () => {
+                document.querySelectorAll('.conf-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const conf = parseInt(e.target.getAttribute('data-conf'));
+                        const rt = performance.now() - jsPsych.getCurrentTrial().start_time;
+                        jsPsych.data.addDataToLastTrial({ 
+                            confidence: conf, 
+                            confidence_rt: rt 
+                        });
+                        jsPsych.finishTrial();
+                    });
+                });
+            }
+        };
+    }
+
+    // ========== Brightness Trial (优化版：500ms原图 + 100ms空白屏 + 修改版) ==========
+    function createSensoryTrial(face) {
+        return {
+            timeline: [
+                // 第一步：显示原图 500ms
+                {
+                    type: jsPsychHtmlKeyboardResponse,
+                    stimulus: `<div style="text-align:center;">
+                                    <img class="face-img" src="${face.social_img}" style="border: 3px solid #ccc;">
+                                    <p style="font-size:18px; margin-top:20px;">Remember this face...</p>
+                                </div>`,
+                    choices: "NO_KEYS",
+                    trial_duration: 500,
+                    data: { task: 'brightness_original', face_id: face.face_id }
+                },
+                // 第二步：空白屏 100ms
+                {
+                    type: jsPsychHtmlKeyboardResponse,
+                    stimulus: '<div style="height:400px;"></div>',
+                    choices: "NO_KEYS",
+                    trial_duration: 100,
+                    data: { task: 'brightness_gap' }
+                },
+                // 第三步：显示修改版，判断亮暗
+                {
+                    type: jsPsychHtmlKeyboardResponse,
+                    stimulus: `<div style="text-align:center;">
+                                    <img class="face-img" src="${face.sensory_img}">
+                                    <p style="font-size:20px; margin-top:20px;">Is this face brighter or darker than before?</p>
+                                    <p style="font-size:16px; color:#666;">Press 'k' for bright, 'd' for dark</p>
+                                </div>`,
+                    choices: ['k', 'd'],
+                    data: { 
+                        task: 'brightness', 
+                        face_id: face.face_id, 
+                        target_brightness: face.target_brightness, 
+                        corr_key: face.corr_sensory_key, 
+                        block: 'brightness' 
+                    },
+                    on_start: (trial) => { 
+                        trial.start_time = performance.now();
+                        trialStartTime = performance.now();
+                    },
+                    on_finish: (data) => {
+                        data.rt = performance.now() - data.start_time;
+                        data.correct = (data.response === data.corr_key) ? 1 : 0;
+                        // 【关键】更新全局 response 时间
+                        lastResponseTime = performance.now();
+                    }
+                }
+            ]
+        };
+    }
+
+    // ========== 构建 Timeline ==========
+    async function buildTimeline() {
+        faces = await loadStimuli();
+        if (faces.length === 0) {
+            console.error("stims.csv not loaded!");
+            return [];
+        }
+        
+        const preload = {
+            type: jsPsychPreload,
+            images: faces.map(f => f.social_img).concat(faces.map(f => f.sensory_img)),
+            message: 'Loading experiment materials, please wait...',
+            error_message: 'Failed to load images. Please check the stims folder.'
+        };
+
+        const welcome = {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: '<div class="instruction"><h1>Welcome</h1><p>Please allow camera access and keep your face in the frame.</p><p>Do not control your blinking — just blink naturally.</p><p>Press any key to start the <strong>Social Judgment</strong> block.</p></div>',
+            on_start: () => { camera.start(); }
+        };
+
+        // Social Block (80 trials: binary judgment + confidence)
+        let socialBlock = [];
+        for (let face of faces) {
+            socialBlock.push(fixation(500));
+            socialBlock.push(createSocialTrial(face));
+            socialBlock.push(createConfidenceTrial());
+            socialBlock.push(iti());
+        }
+
+        const socialBreak = {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: '<div class="instruction">Social block complete.<br><br>Take a short break.<br><br>Press any key to start the <strong>Brightness Judgment</strong> block.</div>'
+        };
+
+        // Brightness Block (80 trials, no confidence)
+        let sensoryBlock = [];
+        for (let face of faces) {
+            sensoryBlock.push(fixation(500));
+            sensoryBlock.push(createSensoryTrial(face));
+            sensoryBlock.push(iti());
+        }
+
+        const debrief = {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: '<div class="instruction">Experiment complete!<br><br>Thank you for participating.<br><br>Press any key to finish and download your data.</div>'
+        };
+
+        const blockOrder = Math.random() < 0.5 ? 'social_first' : 'brightness_first';
+        console.log('Block order:', blockOrder);
+        jsPsych.data.addProperties({ block_order: blockOrder });
+        
+        if (blockOrder === 'social_first') {
+            return [preload, welcome, ...socialBlock, socialBreak, ...sensoryBlock, debrief];
+        } else {
+            const welcomeBrightness = {
+                type: jsPsychHtmlKeyboardResponse,
+                stimulus: '<div class="instruction"><h1>Welcome</h1><p>Please allow camera access and keep your face in the frame.</p><p>Do not control your blinking — just blink naturally.</p><p>Press any key to start the <strong>Brightness Judgment</strong> block.</p></div>',
+                on_start: () => { camera.start(); }
+            };
+            const brightnessBreak = {
+                type: jsPsychHtmlKeyboardResponse,
+                stimulus: '<div class="instruction">Brightness block complete.<br><br>Take a short break.<br><br>Press any key to start the <strong>Social Judgment</strong> block.</div>'
+            };
+            return [preload, welcomeBrightness, ...sensoryBlock, brightnessBreak, ...socialBlock, debrief];
+        }
+    }
+
+    buildTimeline().then(timeline => {
+        jsPsych.run(timeline);
+    });
+</script>
+</html>
